@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define LIMIT     1000     /* Increase this to find more primes */
+#define LIMIT     1000    
 
 int isPrime(int number) {
 
@@ -22,17 +22,17 @@ int isPrime(int number) {
 
 int main(int argc, char *argv[])
 {
-    int     ntasks;               /* total number of tasks in partition */
-    int     rank;                 /* task identifier */
-    int     start;              /* where to start calculating */
-    int     step;               /* calculate every nth number */
+    int     ntasks;              
+    int     rank;                
+    int     start;              
+    int     step;            
 
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &ntasks);
 
-    start = (rank * 2) + 1;       /* Find my starting point - must be odd number */
-    step = ntasks * 2;          /* Determine step, skipping even numbers */
+    start = (rank * 2) + 1;      
+    step = ntasks * 2;         
     if(rank == 0)
         printf("2\n");
     for (int i = start; i <= LIMIT; i += step) 

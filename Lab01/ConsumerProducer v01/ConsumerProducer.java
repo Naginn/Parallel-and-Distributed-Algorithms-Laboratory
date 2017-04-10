@@ -6,18 +6,15 @@ import java.util.concurrent.Semaphore;
 public class ConsumerProducer {
 
     static Object LOCK = new Object();
-
     static LinkedList list = new LinkedList();
     static Semaphore sem = new Semaphore(0);
     static Semaphore mutex = new Semaphore(1);
 
-  
     static class Producer extends Thread {
         public void run() {
             try {
-
                 int N = 0;
-
+                
                 while (true) {
                     mutex.acquire();
                     list.add(new Integer(N++));
@@ -50,13 +47,9 @@ public class ConsumerProducer {
         }
     }
 
-
     public static void main(String [] args) {
         new Producer().start();
         new Consumer(1).start();
         new Consumer(2).start();
-     
-        
-        
     }
 }

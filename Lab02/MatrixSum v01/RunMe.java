@@ -26,7 +26,8 @@ public class RunMe {
         Collection<Task> collection = new ArrayList<Task>( );
         
         Scanner input = null;
-        input = new Scanner(new File("file1.txt"));         
+        input = new Scanner(new File("file1.txt"));     
+            
         while(input.hasNextLine()) {
             rows++;
             Scanner colReader = new Scanner(input.nextLine());
@@ -37,7 +38,8 @@ public class RunMe {
             a.add(col);
         }
         
-        input = new Scanner(new File("file2.txt"));     
+        input = new Scanner(new File("file2.txt"));    
+
         while(input.hasNextLine()) {
             Scanner colReader = new Scanner(input.nextLine());
             ArrayList col = new ArrayList();
@@ -48,6 +50,7 @@ public class RunMe {
         }
         
         ArrayList<ArrayList<Integer>> c = new ArrayList<ArrayList<Integer>>();
+
         for(int i = 0; i < rows; i++){
             ArrayList col1 = new ArrayList();
             for(int j = 0; j < a.get(0).size(); j++){
@@ -56,29 +59,23 @@ public class RunMe {
              c.add(col1);
         }
         
-        
         for(int i = 0; i < rows ; i++){
             Task task = new Task(i, a, b, c);
             collection.add(task);
         }
-        
+
         executor.invokeAll(collection);
         executor.shutdown();
-        /*
-        for(ArrayList item: c){
-            for(Object item2: item){
-                System.out.print(item2 + " ");
-            }
-            System.out.println("\n");
-        }
-        */
+
         Writer wr  = new FileWriter("file3.txt");
+
         for(ArrayList item: c){
             for(Object item2: item){
                 wr.write(item2.toString() + " ");
             }
             wr.write(" ");
         }
+
         System.out.print("Terminat!");
     }
 }
