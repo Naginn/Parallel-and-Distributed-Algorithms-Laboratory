@@ -1,204 +1,182 @@
-/* File:      mpi_floyd.c
- * Purpose:   Implement a parallel version of Floyd's algorithm for finding
- *            the least cost path between each pair of vertices in a labelled
- *            digraph.
- * 
- * Compile:   mpicc -g -Wall -o mpi_floyd mpi_floyd.c
- * Run:       mpiexec -n <number of processes> ./mpi_floyd
+/* File:     mpi_floyd.c
  *
- * Input:     n, the number of vertices
- *            mat, the adjacency matrix
- * Output:    mat, after being updated by floyd so that it contains the
- *            costs of the cheapest paths between all pairs of vertices.
+ *
+ * Purpose:  Implements Floyd's algorithm in parallel for solving the all-pairs
+ *        shortest path problem:  find the length of the shortest path
+ *        between each pair of vertices in a directed graph.
+ *
+ * Input:    n, the number of vertices in digraph
+ *           mat, the adjacency matrix of digraph (user prompted for text file)
+ *
+ * Output:   A matrix showing the costs of the shortest paths
+ *
+ * Compile:  mpicc -g -Wall -o mpi_floyd mpi_floyd.c
+ *
+ * Run:      mpiexec -n <number of processes> ./mpi_floyd
+ *
  *
  * Notes:
- * 1.  n, the number of vertices should be evenly divisible by p, the
- *     number of processes.
- * 2.  The entries in the matrix should be nonnegative ints:  0 on the
- *     diagonal, positive off the diagonal.  Infinity should be indicated
- *     by the constant INFINITY.  (See below.)
- * 3.  The matrix is distributed by block rows.
+ * 1.  The input matrix is overwritten by the matrix of lengths of shortest
+ *     paths.
+ * 2.  Edge lengths should be nonnegative.
+ * 3.  If there is no edge between two vertices, the length is the constant
+ *     INFINITY.  So input edge length should be substantially less than
+ *     this constant.
+ * 4.  The cost of travelling from a vertex to itself is 0.  So the adjacency
+ *     matrix has zeroes on the main diagonal.
+ * 5.  No error checking is done on the input.
+ * 6.  The adjacency matrix is stored as a 1-dimensional array and subscripts
+ *     are computed using the formula:  the entry in the ith row and jth
+ *     column is mat[i*n + j]
+ * 7.  The number of vertices (n) must be evenly divisible by the number of
+ *    processes for this program to work correctly--i.e., n must be a multiple
+ *    of p.
  */
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h> /* for debugging */
 #include <mpi.h>
 
 const int INFINITY = 1000000;
 
-void Read_matrix(int local_mat[], int n, int my_rank, int p, 
-      MPI_Comm comm);
-void Print_matrix(int local_mat[], int n, int my_rank, int p, 
-      MPI_Comm comm);
-void Floyd(int local_mat[], int n, int my_rank, int p, MPI_Comm comm);
-int Owner(int k, int p, int n);
-void Copy_row(int local_mat[], int n, int p, int row_k[], int k);
-void Print_row(int local_mat[], int n, int my_rank, int i);
+int getNumberVertices();
+char* getFilename();
+void readMatrix(char filename[], int mat[], int n);
+void printMatrix(int mat[], int n);
+int min(int x, int y);
+void floyd(int p, int n, int local_mat[], int my_rank);
 
-int main(int argc, char* argv[]) {
-   int  n;
-   int* local_mat;
-   MPI_Comm comm;
-   int p, my_rank;
 
-   MPI_Init(&argc, &argv);
-   comm = MPI_COMM_WORLD;
-   MPI_Comm_size(comm, &p);
-   MPI_Comm_rank(comm, &my_rank);
+int main(int argc, char* argv[])
+{
+    int p;
+    int my_rank;
+    int n;
+    int* mat;
+    int* local_mat;
+    int* temp_mat;
 
-   if (my_rank == 0) {
-      printf("How many vertices?\n");
-      scanf("%d", &n);
-   }
-   MPI_Bcast(&n, 1, MPI_INT, 0, comm);
-   local_mat = malloc(n*n/p*sizeof(int));
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &p);
 
-   if (my_rank == 0) printf("Enter the local_matrix\n");
-   Read_matrix(local_mat, n, my_rank, p, comm);
-   if (my_rank == 0) printf("We got\n");
-   Print_matrix(local_mat, n, my_rank, p, comm);
-   if (my_rank == 0) printf("\n");
+    /* Gets vertices and filename data from user */
+    if (my_rank == 0)
+    {
+        printf("\nHow many vertices? ");
+        scanf("%d", &n);
 
-   Floyd(local_mat, n, my_rank, p, comm);
+        mat = malloc(n * n * sizeof(int));
 
-   if (my_rank == 0) printf("The solution is:\n");
-   Print_matrix(local_mat, n, my_rank, p, comm);
+        char filename[40];
+        printf("Enter the filename: ");
+        scanf("%s", filename);
 
-   free(local_mat);
-   MPI_Finalize();
+        readMatrix(filename, mat, n);
+    }
 
-   return 0;
-}  /* main */
+    /* Buffer allocation for local rows */
+    local_mat = malloc(n * (n/p) * sizeof(int));
 
-/*---------------------------------------------------------------------
- * Function:  Read_matrix
- * Purpose:   Read in the local_matrix on process 0 and scatter it using a 
- *            block row distribution among the processes.
- * In args:   All except local_mat
- * Out arg:   local_mat
- */
-void Read_matrix(int local_mat[], int n, int my_rank, int p, 
-      MPI_Comm comm) { 
-   int i, j;
-   int* temp_mat = NULL;
+    /* Buffer allocation for revised matrix */
+    temp_mat = malloc(n * n * sizeof(int));
 
-   if (my_rank == 0) {
-      temp_mat = malloc(n*n*sizeof(int));
-      for (i = 0; i < n; i++)
-         for (j = 0; j < n; j++)
-            scanf("%d", &temp_mat[i*n+j]);
-      MPI_Scatter(temp_mat, n*n/p, MPI_INT, 
-                  local_mat, n*n/p, MPI_INT, 0, comm);
-      free(temp_mat);
-   } else {
-      MPI_Scatter(temp_mat, n*n/p, MPI_INT, 
-                  local_mat, n*n/p, MPI_INT, 0, comm);
-   }
+    /* Broadcasts n (number of "cities") to each processor */
+    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-}  /* Read_matrix */
+    /* Distributes matrix among the processors */
+    MPI_Scatter(mat, n * (n/p), MPI_INT,
+            local_mat, n * (n/p), MPI_INT, 0, MPI_COMM_WORLD);
 
-/*---------------------------------------------------------------------
- * Function:  Print_row
- * Purpose:   Convert a row of the matrix to a string and then print
- *            the string.  Primarily for debugging:  the single string
- *            is less likely to be corrupted when multiple processes
- *            are attempting to print.
- * In args:   All
- */
-void Print_row(int local_mat[], int n, int my_rank, int i){
-   char char_int[100];
-   char char_row[1000];
-   int j, offset = 0;
+    /* Uses Floyd's algo to compute least cost between cities */
+    floyd(p, n, local_mat, my_rank);
 
-   for (j = 0; j < n; j++) {
-      if (local_mat[i*n + j] == INFINITY)
-         sprintf(char_int, "i ");
-      else
-         sprintf(char_int, "%d ", local_mat[i*n + j]);
-      sprintf(char_row + offset, "%s", char_int);
-      offset += strlen(char_int);
-   }  
-   printf("Proc %d > row %d = %s\n", my_rank, i, char_row);
-}  /* Print_row */
+    /* Gathers the data */
+    MPI_Gather(local_mat, n * (n/p), MPI_INT, temp_mat,
+            n * (n/p), MPI_INT, 0, MPI_COMM_WORLD);
 
-/*---------------------------------------------------------------------
- * Function:  Print_matrix
- * Purpose:   Gather the distributed matrix onto process 0 and print it.
- * In args:   All
- */
-void Print_matrix(int local_mat[], int n, int my_rank, int p, 
-      MPI_Comm comm) {
-   int i, j;
-   int* temp_mat = NULL;
+    /* Prints the matrix */
+    if (my_rank == 0)
+    {
+        printf("The solution is:\n");
+        printf("\n");
+        printMatrix(temp_mat, n);
+        printf("\n");
+    }
 
-   if (my_rank == 0) {
-      temp_mat = malloc(n*n*sizeof(int));
-      MPI_Gather(local_mat, n*n/p, MPI_INT, 
-                 temp_mat, n*n/p, MPI_INT, 0, comm);
-      for (i = 0; i < n; i++) {
-         for (j = 0; j < n; j++)
-            if (temp_mat[i*n+j] == INFINITY)
-               printf("i ");
+    MPI_Finalize();
+    return(0);
+} /* main */
+
+/* Creates adjacency matrix from file specified by user */
+void readMatrix(char filename[], int mat[], int n)
+{
+    FILE *file;
+    file = fopen(filename, "r");
+    int i, j;
+
+    for (i = 0; i < n; i++)
+       for (j = 0; j < n; j++)
+          fscanf(file, "%d", &mat[i * n + j]);
+
+    fclose(file);
+} /* readMatrix */
+
+void printMatrix(int mat[], int n)
+{
+    int i, j;
+    for (i = 0; i < n; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            if (mat[i * n + j] == INFINITY)
+                printf("i ");
             else
-               printf("%d ", temp_mat[i*n+j]);
-         printf("\n");
-      }
-      free(temp_mat);
-   } else {
-      MPI_Gather(local_mat, n*n/p, MPI_INT, 
-                 temp_mat, n*n/p, MPI_INT, 0, comm);
-   }
-}  /* Print_matrix */
+                printf("%d ", mat[i * n + j]);
+        }
+        printf("\n");
+    }
+} /* printMatrix */
 
-/*---------------------------------------------------------------------
- * Function:    Floyd
- * Purpose:     Implement a distributed version of Floyd's algorithm for
- *              finding the shortest path between all pairs of vertices.
- *              The adjacency matrix is distributed by block rows.
- * In args:     All except local_mat
- * In/out arg:  local_mat:  on input the adjacency matrix.  On output
- *              the matrix of lowests costs between all pairs of
- *              vertices
- */
-void Floyd(int local_mat[], int n, int my_rank, int p, MPI_Comm comm) {
-   int global_k, local_i, global_j, temp;
-   int root;
-   int* row_k = malloc(n*sizeof(int));
+/* Returns minimum of two ints--used in Floyd's algorithm */
+int min(int x, int y)
+{
+    if (x < y)
+        return x;
+    else
+        return y;
+} /* min */
 
-   for (global_k = 0; global_k < n; global_k++) {
-      root = Owner(global_k, p, n);
-      if (my_rank == root)
-         Copy_row(local_mat, n, p, row_k, global_k);
-      MPI_Bcast(row_k, n, MPI_INT, root, comm);
-      for (local_i = 0; local_i < n/p; local_i++)
-         for (global_j = 0; global_j < n; global_j++) {
-               temp = local_mat[local_i*n + global_k] + row_k[global_j];
-               if (temp < local_mat[local_i*n+global_j])
-                  local_mat[local_i*n + global_j] = temp;
-         }
-   }
-   free(row_k);
-}  /* Floyd */
+/* Floyd's Algorithm */
+void floyd(int p, int n, int local_mat[], int my_rank)
+{
+    int* row_int_city;
+    int local_int_city;
+    int root;
 
-/*---------------------------------------------------------------------
- * Function:  Owner
- * Purpose:   Return rank of process that owns global row k
- * In args:   All
- */
-int Owner(int k, int p, int n) {
-   return k/(n/p);
-}  /* Owner */
+    row_int_city = malloc(n * sizeof(int));
 
-/*---------------------------------------------------------------------
- * Function:  Copy_row
- * Purpose:   Copy the row with *global* subscript k into row_k
- * In args:   All except row_k
- * Out arg:   row_k
- */
-void Copy_row(int local_mat[], int n, int p, int row_k[], int k) {
-   int j;
-   int local_k = k % (n/p);
-
-   for (j = 0; j < n; j++)
-      row_k[j] = local_mat[local_k*n + j];
-}  /* Copy_row */
+    int int_city;
+    for (int_city = 0; int_city < n; int_city++) {
+        root = int_city / (n / p);
+        if (my_rank == root) {
+            local_int_city = int_city % (n / p);
+            int j;
+            for (j = 0; j < n; j++)
+                row_int_city[j] = local_mat[local_int_city * n + j];
+        }
+        MPI_Bcast(row_int_city, n, MPI_INT, root, MPI_COMM_WORLD);
+        int local_city1;
+        for (local_city1 = 0; local_city1 < n / p; local_city1++)
+        {
+            int city2;
+            for (city2 = 0; city2 < n; city2++)
+            {
+                local_mat[local_city1 * n + city2] =
+                    min(local_mat[local_city1 * n + city2],
+                    local_mat[local_city1*n + int_city] + row_int_city[city2]);
+            }
+        }
+    }
+    free(row_int_city);
+} /* floyd */
